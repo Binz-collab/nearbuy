@@ -1,0 +1,218 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ERD 자동 생성을 위한 제너레이터 추가
+generator erd {
+  provider = "prisma-erd-generator"
+  output   = "../docs/erd/nearbuy-erd.svg"
+
+  // --- 추천 옵션들 ---
+  // 'dagre'는 위에서 아래로 흐르는 계층 구조를 만들어주어 훨씬 정돈되어 보입니다.
+  layout = "dagre"
+
+  // 'neutral' 또는 'forest' 테마가 눈에 덜 피로하고 차분합니다.
+  theme = "neutral"
+
+  // 'ortho'는 선을 직각으로 꺾어주어 복잡한 관계를 더 명확하게 보여줍니다.
+  line = "ortho"
+
+  // 글꼴 크기 조절
+  fontSize = "12px"
+
+  // 모델 간 간격 조절
+  spacing = "2"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// ------------------------------------------------------
+// 1. User (사용자)
+// ------------------------------------------------------
+model User {
+  id       String @id @default(uuid())
+  name     String
+  nickname String
+
+  // 소셜 로그인 관련
+  provider   String? // "kakao", "google" 등
+  providerId String?
+
+  // 관계 (Relations)
+  sessions         Session[]
+  addedItems       Item[]         @relation("AddedItems")
+  purchasedItems   Item[]         @relation("PurchasedItems")
+  groupMemberships GroupMember[]
+  notifications    Notification[]
+
+  // ✨ 추가된 관계: 사용자는 여러 개의 일정과 루틴을 가짐
+  schedules Schedule[] @relation("UserSchedules")
+  routines  Routine[]  @relation("UserRoutines")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // 다중 소셜 로그인 제공자 지원을 위한 복합 유니크 키
+  @@unique([provider, providerId])
+}
+
+// ------------------------------------------------------
+// 2. Session (세션/인증)
+// ------------------------------------------------------
+model Session {
+  id           String   @id @default(uuid())
+  sessionToken String   @unique
+  userId       String
+  expiresAt    DateTime
+  deviceInfo   String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+}
+
+// ------------------------------------------------------
+// 3. Group (그룹)
+// ------------------------------------------------------
+model Group {
+  id          String  @id @default(uuid())
+  name        String
+  description String?
+
+  // 관계 (Relations)
+  items         Item[]
+  members       GroupMember[]
+  notifications Notification[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ------------------------------------------------------
+// 4. GroupMember (N:M 중간 테이블)
+// ------------------------------------------------------
+model GroupMember {
+  id      String @id @default(uuid())
+  userId  String
+  groupId String
+  role    String @default("member") // "admin", "member"
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  joinedAt DateTime @default(now())
+
+  // 한 유저가 같은 그룹에 중복 가입하는 것을 방지
+  @@unique([userId, groupId])
+}
+
+// ------------------------------------------------------
+// 5. Item (쇼핑 아이템/할 일)
+// ------------------------------------------------------
+model Item {
+  id       String @id @default(uuid())
+  name     String
+  category String
+
+  // 장소/지도 관련
+  placeName String?
+  address   String?
+  lat       Float
+  lng       Float
+  placeId   String?
+
+  // 상태 및 일정
+  completed Boolean @default(false)
+  memo      String?
+
+  // 관계 (Relations)
+  addedById      String
+  groupId        String
+  purchasingById String?
+
+  // ✨ 추가된 관계: 어떤 일정(퇴근 등)에 연결된 구매인지 매핑
+  scheduleId String?
+
+  addedBy      User      @relation("AddedItems", fields: [addedById], references: [id])
+  group        Group     @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  purchasingBy User?     @relation("PurchasedItems", fields: [purchasingById], references: [id])
+  schedule     Schedule? @relation("ScheduleItems", fields: [scheduleId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ------------------------------------------------------
+// 6. Schedule (일정)
+// ------------------------------------------------------
+model Schedule {
+  id        String   @id @default(uuid())
+  title     String
+  startTime DateTime
+  endTime   DateTime
+  location  String
+  status    String   @default("upcoming") // "upcoming", "current", "past"
+
+  calendarSource  String  @default("routine")
+  calendarEventId String? @unique
+  isRoutine       Boolean @default(false)
+
+  // ✨ 추가된 관계: 일정의 소유자와, 어떤 루틴에서 파생되었는지 매핑
+  userId    String
+  routineId String?
+
+  user    User     @relation("UserSchedules", fields: [userId], references: [id], onDelete: Cascade)
+  routine Routine? @relation("RoutineSchedules", fields: [routineId], references: [id], onDelete: SetNull)
+  items   Item[]   @relation("ScheduleItems") // 이 일정에 연결된 아이템 목록
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ------------------------------------------------------
+// 7. Routine (반복 루틴)
+// ------------------------------------------------------
+model Routine {
+  id            String @id @default(uuid())
+  name          String
+  startLocation String
+  endLocation   String
+
+  // 시간은 DateTime이 아닌 단순 문자열(HH:mm) 또는 초 단위 정수로 관리하는 것이 편할 수 있음
+  startTime   String
+  endTime     String?
+  isRoundTrip Boolean @default(true)
+  daysOfWeek  Int // 비트마스크 용도 (예: 월~금 = 31)
+
+  // ✨ 추가된 관계: 루틴의 소유자 매핑
+  userId    String
+  user      User       @relation("UserRoutines", fields: [userId], references: [id], onDelete: Cascade)
+  schedules Schedule[] @relation("RoutineSchedules") // 이 루틴에서 생성된 일정들
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ------------------------------------------------------
+// 8. Notification (알림)
+// ------------------------------------------------------
+model Notification {
+  id      String  @id @default(uuid())
+  type    String // "enter", "purchased" 등
+  message String
+  isRead  Boolean @default(false)
+
+  // 수신자 및 그룹 타겟팅
+  userId  String
+  groupId String?
+
+  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  group Group? @relation(fields: [groupId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+}
