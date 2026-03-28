@@ -40,8 +40,6 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-/docs
-
 /.idea
 # Default ignored files
 /shelf/
@@ -54,3 +52,7 @@ next-env.d.ts
 # Editor-based HTTP Client requests
 /httpRequests/
 
+# Prisma
+/src/generated/prisma
+*.db
+*.db-journal
