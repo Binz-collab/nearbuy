@@ -29,6 +29,7 @@ generator erd {
 
 datasource db {
   provider = "sqlite"
+  url      = env("DATABASE_URL")
 }
 
 // ------------------------------------------------------
@@ -36,12 +37,11 @@ datasource db {
 // ------------------------------------------------------
 model User {
   id       String @id @default(uuid())
-  name     String
   nickname String
 
   // 소셜 로그인 관련
-  provider   String? // "kakao", "google" 등
-  providerId String?
+  provider   String // "kakao", "google" 등
+  providerId String
 
   // 관계 (Relations)
   sessions         Session[]
@@ -49,10 +49,10 @@ model User {
   purchasedItems   Item[]         @relation("PurchasedItems")
   groupMemberships GroupMember[]
   notifications    Notification[]
-
-  // ✨ 추가된 관계: 사용자는 여러 개의 일정과 루틴을 가짐
-  schedules Schedule[] @relation("UserSchedules")
-  routines  Routine[]  @relation("UserRoutines")
+  schedules        Schedule[]     @relation("UserSchedules")
+  routines         Routine[]      @relation("UserRoutines")
+  sentInvitations  Invitation[]   @relation("UserInvitations") // 추가: 내가 보낸 초대들
+  activityLogs     ActivityLog[]  @relation("UserActivityLogs") // 추가: 내가 수행한 활동 로그들
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -88,6 +88,8 @@ model Group {
   items         Item[]
   members       GroupMember[]
   notifications Notification[]
+  invitations   Invitation[]      // 추가: 이 그룹으로 발행된 초대 링크 목록
+  activityLogs  ActivityLog[]     // 추가: 이 그룹에서 발생한 활동 로그 목록
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -134,9 +136,7 @@ model Item {
   addedById      String
   groupId        String
   purchasingById String?
-
-  // ✨ 추가된 관계: 어떤 일정(퇴근 등)에 연결된 구매인지 매핑
-  scheduleId String?
+  scheduleId     String?
 
   addedBy      User      @relation("AddedItems", fields: [addedById], references: [id])
   group        Group     @relation(fields: [groupId], references: [id], onDelete: Cascade)
@@ -162,13 +162,13 @@ model Schedule {
   calendarEventId String? @unique
   isRoutine       Boolean @default(false)
 
-  // ✨ 추가된 관계: 일정의 소유자와, 어떤 루틴에서 파생되었는지 매핑
+  // 관계 (Relations)
   userId    String
   routineId String?
 
   user    User     @relation("UserSchedules", fields: [userId], references: [id], onDelete: Cascade)
   routine Routine? @relation("RoutineSchedules", fields: [routineId], references: [id], onDelete: SetNull)
-  items   Item[]   @relation("ScheduleItems") // 이 일정에 연결된 아이템 목록
+  items   Item[]   @relation("ScheduleItems")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -189,7 +189,7 @@ model Routine {
   isRoundTrip Boolean @default(true)
   daysOfWeek  Int // 비트마스크 용도 (예: 월~금 = 31)
 
-  // ✨ 추가된 관계: 루틴의 소유자 매핑
+  // 관계 (Relations)
   userId    String
   user      User       @relation("UserRoutines", fields: [userId], references: [id], onDelete: Cascade)
   schedules Schedule[] @relation("RoutineSchedules") // 이 루틴에서 생성된 일정들
@@ -203,7 +203,7 @@ model Routine {
 // ------------------------------------------------------
 model Notification {
   id      String  @id @default(uuid())
-  type    String // "enter", "purchased" 등
+  type    String // "enter", "purchased", "invitation" 등
   message String
   isRead  Boolean @default(false)
 
@@ -215,4 +215,45 @@ model Notification {
   group Group? @relation(fields: [groupId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
+}
+
+// ------------------------------------------------------
+// 9. Invitation (그룹 초대 - SNS 링크 기반)
+// ------------------------------------------------------
+model Invitation {
+  id        String   @id @default(uuid())
+  groupId   String
+  inviterId String
+  token     String   @unique
+  status    String   @default("PENDING") // PENDING, ACCEPTED, EXPIRED 등
+  expiresAt DateTime
+
+  group   Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  inviter User  @relation("UserInvitations", fields: [inviterId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([groupId, status]) // 그룹별 유효 초대 조회 최적화
+}
+
+// ------------------------------------------------------
+// 10. ActivityLog (시스템 활동 로그)
+// ------------------------------------------------------
+model ActivityLog {
+  id          String   @id @default(uuid())
+  groupId     String
+  actorUserId String
+  actionType  String
+  targetType  String
+  targetId    String
+  metadata    Json?
+
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  actor User  @relation("UserActivityLogs", fields: [actorUserId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([groupId, createdAt])
+  @@index([actorUserId, createdAt])
 }
